@@ -8,6 +8,8 @@ import numpy as np
 import time
 from impinvar import impinvar
 
+SHOW_FILTERS = True
+
 FLOAT_MIN = 1e-10
 SAMPLE_RATE = 44100.0
 NUM_IHCS = 3500
@@ -37,19 +39,6 @@ def calc_coeffs(Q, w):
        (3*term1**2*term2**2 + 3*term2**4),
        3*term1*term2**4,
        term2**6]
-
-#  # fourth order
-#  b = [w**7.0, 0.0]
-#
-#  a = [1.0,
-#       4*term1,
-#       (6*term1**2 + 4*term2**2),
-#       (4*term1**3 + 12*term1*term2**2),
-#       (term1**4 + 12*term1**2*term2**2 + 6*term2**4),
-#       (4*term1**3*term2**2 + 12*term1*term2**4),
-#       (6*term1**2*term2**4 + 4*term2**6),
-#       4*term1*term2**6,
-#       term2**8]
 
   return (b, a)
 
@@ -93,9 +82,13 @@ gain = {}
 
 sys.stderr.write("calculating coefficients...\n")
 
+plt.ion()
+plt.subplots_adjust(hspace=1.0)
+
 for i in range(*SIM_IHCS):
   # start with gain (q) of 1/2**0.5 (minimum for 0 dB gain)
-  gain[i] = 1/2**0.5
+  #gain[i] = 1/2**0.5
+  gain[i] = 5.0
 
   # greenwood function
   # https://en.wikipedia.org/wiki/Greenwood_function
@@ -113,47 +106,48 @@ for i in range(*SIM_IHCS):
   filter_bank[i] = signal.cont2discrete(cont_filter_bank[i], dt=1.0/SAMPLE_RATE, method="bilinear")
   # don't know why cont2discrete outputs first term as a nested list
   filter_bank[i] = (filter_bank[i][0][0], filter_bank[i][1])
-  
-  ## method 2: impinvar
-  #filter_bank[i] = impinvar(*cont_filter_bank[i], fs=SAMPLE_RATE)
-
-  ## method 3: bilinear
-  #filter_bank[i] = signal.bilinear(*cont_filter_bank[i], fs=SAMPLE_RATE)
 
   # setup initial conditions for lfilter
   zi[i] = signal.lfilter_zi(*filter_bank[i])
 
-#  if i % 100 == 0:
-#    # bode plot of continuous time filter
-#    print(cont_filter_bank[i])
-#    analog_bode_plot(cont_filter_bank[i])
-#
-#    # bode plot of discrete time filter
-#    print(filter_bank[i])
-#    digital_bode_plot(*filter_bank[i])
-#
-#    # bode plot of discrete time sos filter
-#    sos_filter = signal.tf2sos(*filter_bank[i])
-#    print(sos_filter)
-#    sos_bode_plot(sos_filter)
-#
-#    ## TEST FILTERING USING DISCRETE TIME FILTER
-#    y = signal.lfilter(filter_bank[i][0], filter_bank[i][1], s_in)
-#    #y, _ = signal.lfilter(filter_bank[i][0], filter_bank[i][1], s_in, zi=zi[i]*s_in[0])
-#    #y = signal.filtfilt(filter_bank[i][0], filter_bank[i][1], s_in)
-#
-#    #y = signal.sosfilt(sos_filter, s_in)
-#    #zi[i] = signal.sosfilt_zi(sos_filter)
-#    #y, _ = signal.sosfilt(sos_filter, s_in, zi=zi[0]*s_in[0])
-#    #y = signal.sosfiltfilt(sos_filter, s_in)
-#
-#    plt.figure()
-#    plt.plot(range(0, len(s_in)), s_in)
-#    plt.plot(range(0, len(s_in)), np.clip(y, -1, 1))
-#    plt.show()
+  if SHOW_FILTERS:
+    plt.clf()
+
+    # frequency response of continuous time filter
+    w, mag, phase = signal.bode(cont_filter_bank[i], w=2*np.pi*np.linspace(20, 22000, num=1000))
+
+    plt.subplot(3, 1, 1)
+    plt.title("Freq. Resp. Analog CF=%.02f" % cf[i])
+    plt.xlabel("Frequency (Hz)")
+    plt.ylabel("dB")
+    plt.plot(w/(2*np.pi), mag)
+
+    # frequency response of discrete time filter
+    w, h = signal.freqz(*filter_bank[i], worN=1500)
+
+    plt.subplot(3, 1, 2)
+    plt.title("Freq. Resp. Digital CF=%.02f" % cf[i])
+    plt.xlabel("Normalized Frequency (rad/sample)")
+    plt.ylabel("dB")
+    plt.plot(w/np.pi, 20*np.log10(np.abs(h)))
+
+    # plot of testing discrete time filter
+    signal_in = np.sin(2*np.pi*cf[i]*np.linspace(0, 0.1, SAMPLE_RATE*0.1)) + 0.5*np.random.randn(int(SAMPLE_RATE*0.1))
+    signal_out = signal.lfilter(*filter_bank[i], signal_in)
+
+    plt.subplot(3, 1, 3)
+    plt.title("Filter Test CF=%.02f" % cf[i])
+    plt.xlabel("Sample")
+    plt.ylabel("Amplitude")
+    plt.plot(signal_in)
+    plt.plot(signal_out)
+
+    plt.pause(0.01)
 
   sys.stderr.write("\rihc: %s cf: %.02f cf_rad: %.04f cf_warp: %s" %
                    (i+1, cf[i], cf_rad[i], cf_warp[i]))
+
+plt.ioff()
 
 sys.stderr.write("\n")
 
