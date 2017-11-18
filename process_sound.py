@@ -8,20 +8,15 @@ import numpy as np
 import time
 from impinvar import impinvar
 
-SHOW_FILTERS = True
+SHOW_FILTERS = False
+SHOW_PROGRESS = False
 
 FLOAT_MIN = 1e-10
 SAMPLE_RATE = 44100.0
 NUM_IHCS = 3500
 SIM_IHCS = (0, 3500)
 
-# generate signal
-num_seconds = 1.0
-test_freq = 207.12
-
-#xvals = np.linspace(0, num_seconds, SAMPLE_RATE*num_seconds)
-#s_in = np.sin(2 * np.pi * test_freq * xvals)
-#s_in = np.sin(2 * np.pi * test_freq * xvals) + np.sin(2 * np.pi * 213.12 * xvals) + 0.1*np.random.rand(int(SAMPLE_RATE*num_seconds))
+# read in signal
 s_in = wavfile.read("andy.wav")[1][:,1] / np.iinfo(np.int32).max
 
 def calc_coeffs(Q, w):
@@ -157,10 +152,6 @@ plt.ion()
 while True:
   s_time = time.time()
 
-  test_freq_cf = []
-  test_freq_output = []
-  pps = []
-  gains = []
   output_bank = {}
 
   for i in range(*SIM_IHCS):
@@ -169,67 +160,18 @@ while True:
 
     output_bank[i] = s_out
 
-    plt.clf()
-    plt.title("IHC CF: %.02f" % cf[i])
-    plt.xlabel("Time (sample)")
-    plt.ylabel("Amplitude (a.u.)")
-    plt.plot(s_in, linewidth=1)
-    plt.plot(s_out, linewidth=1)
-    plt.pause(0.001)
-
-#    freqz = fft(s_out, int(SAMPLE_RATE))
-
-#    gains.append(gain[i])
-#    test_freq_cf.append(cf[i])
-#    test_freq_output.append(abs(freqz[int(cf[i])]))
-
-    ## SHOW FFT
-    #plt.figure()
-    #plt.plot(abs(freqz))
-    #plt.show()
-
-#    look_back = int(2 * SAMPLE_RATE / 100.0)
-#    peak_width = 0.5 * SAMPLE_RATE / 100.0
-
-#    peaks_per_sec = 0#(s_out[-look_back:][signal.find_peaks_cwt(s_out[-look_back:], [1])] > 1.0).sum() * (SAMPLE_RATE / look_back)
-#    pps.append(peaks_per_sec)
-#
-#    # adjust gain based on maximum of 100 firings per second
-#    if peaks_per_sec == 0.0 and gain[i] == 0.0:
-#      gain[i] = 0.1
-#    elif peaks_per_sec > 100.0:
-#      gain[i] *= np.exp(-0.1*(peaks_per_sec/100.0))
-#    elif peaks_per_sec < 10.0:
-#      gain[i] *= np.exp(0.001*(100.0/(peaks_per_sec+1)))
-#
-#    if gain[i] < 0.0:
-#      gain[i] = 0.0
-#    elif gain[i] > 100.0:
-#      gain[i] = 100.0
-#
-#    cont_filter_bank[i] = calc_coeffs(gain[i], cf_rad[i])
-#
-#    ## method 1: cont2discrete
-#    filter_bank[i] = signal.cont2discrete(cont_filter_bank[i], dt=1.0/SAMPLE_RATE, method="bilinear")
-#    # don't know why cont2discrete outputs first term as a nested list
-#    filter_bank[i] = (filter_bank[i][0][0], filter_bank[i][1])
-#
-#    zi[i] = signal.lfilter_zi(*filter_bank[i])
-
-    sys.stderr.write("\rihc: %s cf: %.02f gain: %.02f" % (i, cf[i], gain[i]))
-#    print("ihc: %s cf: %.02f gain: %.02f max_out: %.02f peaks_per_sec: %d" % (i, cf[i], gain[i], max(s_out), peaks_per_sec))
-
-#  plt.clf()
-#  plt.subplot(3, 1, 1)
-#  plt.semilogy(test_freq_cf, test_freq_output)
-#  plt.subplot(3, 1, 2)
-#  plt.plot(test_freq_cf, pps)
-#  plt.subplot(3, 1, 3)
-#  plt.plot(test_freq_cf, gains)
-#  plt.pause(0.05)
+    if SHOW_PROGRESS:
+      plt.clf()
+      plt.title("IHC CF: %.02f" % cf[i])
+      plt.xlabel("Time (sample)")
+      plt.ylabel("Amplitude (a.u.)")
+      plt.plot(s_in, linewidth=1)
+      plt.plot(s_out, linewidth=1)
+      plt.pause(0.001)
 
   print("\ntook %.02f seconds\n\n" % (time.time() - s_time))
 
+  # perform only one iteration
   break
 
 plt.ioff()
@@ -268,10 +210,8 @@ for t in range(1, len(s_in)):
 plt.figure()
 plt.title("Cochlear Encoding")
 plt.xlabel("Time (sample)")
-plt.ylabel("IHC CF")
-#plt.plot(range(1, len(s_in)), output_bank[533][1:])
-#plt.scatter(coding_x, [0] * len(coding_x))
-plt.scatter(coding_x, coding_y, s=2)
+plt.ylabel("log2(IHC CF)")
+plt.scatter(coding_x, np.log2(coding_y), s=2)
 plt.show()
 
 with open("sparse.txt", "wb") as fp:
