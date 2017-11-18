@@ -9,7 +9,8 @@ import time
 from impinvar import impinvar
 
 SHOW_FILTERS = False
-SHOW_PROGRESS = False
+SHOW_PROGRESS = True
+SHOW_RESULT = True
 
 FLOAT_MIN = 1e-10
 SAMPLE_RATE = 44100.0
@@ -18,6 +19,7 @@ SIM_IHCS = (0, 3500)
 
 # read in signal
 s_in = wavfile.read("andy.wav")[1][:,1] / np.iinfo(np.int32).max
+s_in = s_in[:10000]
 
 def calc_coeffs(Q, w):
   # DAPGF filter, continuous time
@@ -76,9 +78,11 @@ cf_warp = {}
 gain = {}
 
 sys.stderr.write("calculating coefficients...\n")
+s_time = time.time()
 
-plt.ion()
-plt.subplots_adjust(hspace=1.0)
+if SHOW_FILTERS:
+  plt.ion()
+  plt.subplots_adjust(hspace=1.0)
 
 for i in range(*SIM_IHCS):
   # start with gain (q) of 1/2**0.5 (minimum for 0 dB gain)
@@ -139,15 +143,19 @@ for i in range(*SIM_IHCS):
 
     plt.pause(0.01)
 
-  sys.stderr.write("\rihc: %s cf: %.02f cf_rad: %.04f cf_warp: %s" %
+  sys.stderr.write("\rihc: %s cf: %.02f cf_rad: %.04f cf_warp: %.04f" %
                    (i+1, cf[i], cf_rad[i], cf_warp[i]))
 
-plt.ioff()
+if SHOW_FILTERS:
+  plt.ioff()
 
-sys.stderr.write("\n")
+sys.stderr.write("\ntook %.02f seconds\n" % (time.time() - s_time,))
 
 # filter using filterbank
-plt.ion()
+sys.stderr.write("processing waveform...\n")
+
+if SHOW_PROGRESS:
+  plt.ion()
 
 while True:
   s_time = time.time()
@@ -169,14 +177,20 @@ while True:
       plt.plot(s_out, linewidth=1)
       plt.pause(0.001)
 
-  print("\ntook %.02f seconds\n\n" % (time.time() - s_time))
+    sys.stderr.write("\rihc: %s cf: %.02f" % (i+1, cf[i]))
+
+  sys.stderr.write("\ntook %.02f seconds\n" % (time.time() - s_time))
 
   # perform only one iteration
   break
 
-plt.ioff()
+if SHOW_PROGRESS:
+  plt.ioff()
 
 # determine when neurons are activated
+sys.stderr.write("generating neuronal encoding...\n")
+s_time = time.time()
+
 coding_x = []
 coding_y = []
 
@@ -185,8 +199,9 @@ time_since_last = dict(zip(range(*SIM_IHCS), [0] * len(range(*SIM_IHCS))))
 firings = dict(zip(range(*SIM_IHCS), [[0] for _ in range(*SIM_IHCS)]))
 
 for t in range(1, len(s_in)):
+  sys.stderr.write("\rtime %d of %d" % (t, len(s_in)))
+
   for i in range(*SIM_IHCS):
-    #print(i, t, output_bank[i][t], np.random.poisson(lam=0.1), timeout[i])
     if output_bank[i][t] > 1.0 and \
        output_bank[i][t-1] < output_bank[i][t] and \
        np.random.poisson(lam=0.01) > 0 and \
@@ -207,12 +222,15 @@ for t in range(1, len(s_in)):
 
     time_since_last[i] += 1
 
-plt.figure()
-plt.title("Cochlear Encoding")
-plt.xlabel("Time (sample)")
-plt.ylabel("log2(IHC CF)")
-plt.scatter(coding_x, np.log2(coding_y), s=2)
-plt.show()
+sys.stderr.write("\ntook %.02f seconds\n" % (time.time() - s_time,))
+
+if SHOW_RESULT:
+  plt.figure()
+  plt.title("Cochlear Encoding")
+  plt.xlabel("Time (sample)")
+  plt.ylabel("log2(IHC CF)")
+  plt.scatter(coding_x, np.log2(coding_y), s=2)
+  plt.show()
 
 with open("sparse.txt", "wb") as fp:
   for i, dists in firings.items():
