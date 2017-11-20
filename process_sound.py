@@ -1,41 +1,50 @@
-import random
 import sys
 from scipy import signal
 from scipy.io import wavfile
-from scipy.fftpack import fft
 import matplotlib.pyplot as plt
 import numpy as np
 import time
-from impinvar import impinvar
+#from impinvar import impinvar
+#from scipy.fftpack import fft
 
 SHOW_FILTERS = False
-SHOW_PROGRESS = True
+SHOW_PROGRESS = False
 SHOW_RESULT = True
 
-FLOAT_MIN = 1e-10
+POIS_LAMBDA = 0.01
 SAMPLE_RATE = 44100.0
 NUM_IHCS = 3500
 SIM_IHCS = (0, 3500)
 
 # read in signal
 s_in = wavfile.read("andy.wav")[1][:,1] / np.iinfo(np.int32).max
-s_in = s_in[:10000]
+#s_in = wavfile.read("wkwttg.wav")[1][:,1] / np.iinfo(np.int32).max
+#s_in = s_in[:10000]
 
 def calc_coeffs(Q, w):
   # DAPGF filter, continuous time
-  term1 = w / float(Q)
-  term2 = float(w)
+  w = np.float64(w)
+  Q = np.float64(Q)
 
-  # third order
-  b = [w**5.0, 0.0]
+  term1 = w / Q
+  term2 = w
 
-  a = [1.0,
-       3*term1,
-       (3*term1**2 + 3*term2**2),
-       (term1**3 + 6*term1*term2**2),
-       (3*term1**2*term2**2 + 3*term2**4),
-       3*term1*term2**4,
-       term2**6]
+#  # third order
+#  b = np.array((np.power(w, 5.0), 0.0), dtype=np.float64)
+#
+#  a = np.array((1.0,
+#                3*term1,
+#                3*np.power(term1, 2) + 3*np.power(term2, 2),
+#                np.power(term1, 3) + 6*term1*np.power(term2, 2),
+#                3*np.power(term1, 2)*np.power(term2, 2) + 3*np.power(term2, 4),
+#                3*term1*np.power(term2, 4),
+#                np.power(term2, 6)),
+#               dtype=np.float64)
+
+  # first order
+  b = np.array((w, 0.0), dtype=np.float64)
+
+  a = np.array((1.0, term1, np.power(term2, 2)), dtype=np.float64)
 
   return (b, a)
 
@@ -86,8 +95,8 @@ if SHOW_FILTERS:
 
 for i in range(*SIM_IHCS):
   # start with gain (q) of 1/2**0.5 (minimum for 0 dB gain)
-  #gain[i] = 1/2**0.5
-  gain[i] = 5.0
+  #gain[i] = 0.5**0.5
+  gain[i] = 10
 
   # greenwood function
   # https://en.wikipedia.org/wiki/Greenwood_function
@@ -132,7 +141,7 @@ for i in range(*SIM_IHCS):
 
     # plot of testing discrete time filter
     signal_in = np.sin(2*np.pi*cf[i]*np.linspace(0, 0.1, SAMPLE_RATE*0.1)) + 0.5*np.random.randn(int(SAMPLE_RATE*0.1))
-    signal_out = signal.lfilter(*filter_bank[i], signal_in)
+    signal_out = signal.filtfilt(*filter_bank[i], x=signal_in)
 
     plt.subplot(3, 1, 3)
     plt.title("Filter Test CF=%.02f" % cf[i])
@@ -143,7 +152,7 @@ for i in range(*SIM_IHCS):
 
     plt.pause(0.01)
 
-  sys.stderr.write("\rihc: %s cf: %.02f cf_rad: %.04f cf_warp: %.04f" %
+  sys.stderr.write("\rihc: %s cf: %.02f cf_rad: %.02f cf_warp: %.02f" %
                    (i+1, cf[i], cf_rad[i], cf_warp[i]))
 
 if SHOW_FILTERS:
@@ -163,9 +172,7 @@ while True:
   output_bank = {}
 
   for i in range(*SIM_IHCS):
-    s_out, zf = signal.lfilter(*filter_bank[i], x=s_in, zi=zi[i])
-    zi[i] = zf
-
+    s_out = signal.filtfilt(*filter_bank[i], x=s_in)
     output_bank[i] = s_out
 
     if SHOW_PROGRESS:
@@ -173,8 +180,9 @@ while True:
       plt.title("IHC CF: %.02f" % cf[i])
       plt.xlabel("Time (sample)")
       plt.ylabel("Amplitude (a.u.)")
+      plt.ylim((-1, 1))
       plt.plot(s_in, linewidth=1)
-      plt.plot(s_out, linewidth=1)
+      plt.plot(np.clip(s_out, -1, 1), linewidth=1)
       plt.pause(0.001)
 
     sys.stderr.write("\rihc: %s cf: %.02f" % (i+1, cf[i]))
@@ -194,18 +202,20 @@ s_time = time.time()
 coding_x = []
 coding_y = []
 
-timeout = dict(zip(range(*SIM_IHCS), [0] * len(range(*SIM_IHCS))))
-time_since_last = dict(zip(range(*SIM_IHCS), [0] * len(range(*SIM_IHCS))))
+timeout = np.zeros(NUM_IHCS, dtype=np.int64)
+time_since_last = np.zeros(NUM_IHCS, dtype=np.int64)
 firings = dict(zip(range(*SIM_IHCS), [[0] for _ in range(*SIM_IHCS)]))
 
-for t in range(1, len(s_in)):
-  sys.stderr.write("\rtime %d of %d" % (t, len(s_in)))
+_timeout_reset = int(0.01 * SAMPLE_RATE)
 
-  for i in range(*SIM_IHCS):
-    if output_bank[i][t] > 1.0 and \
-       output_bank[i][t-1] < output_bank[i][t] and \
-       np.random.poisson(lam=0.01) > 0 and \
-       timeout[i] == 0:
+for t in range(1, len(s_in)):
+  if t % 100 == 0:
+    sys.stderr.write("\rtime %d of %d" % (t, len(s_in)))
+
+  for i in map(int, np.intersect1d(np.where(np.random.poisson(0.01, NUM_IHCS)), range(*SIM_IHCS))):
+    if timeout[i] == 0 and \
+       output_bank[i][t] > 1.0 and \
+       output_bank[i][t-1] < output_bank[i][t]:
       coding_y.append(cf[i])
       coding_x.append(t)
 
@@ -215,12 +225,10 @@ for t in range(1, len(s_in)):
         firings[i].append(time_since_last[i])
         time_since_last[i] = 0
 
-      timeout[i] = int(0.01 * SAMPLE_RATE)
+      timeout[i] = _timeout_reset
 
-    if timeout[i] > 0:
-      timeout[i] = timeout[i] - 1
-
-    time_since_last[i] += 1
+  timeout = np.subtract(timeout, 1).clip(0)
+  time_since_last = np.add(time_since_last, 1)
 
 sys.stderr.write("\ntook %.02f seconds\n" % (time.time() - s_time,))
 
