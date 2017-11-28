@@ -14,7 +14,7 @@ a <- read.table("output.txt")
 
 ## guess for single IHCs
 
-for (i in unique(as.numeric(a$V2)))
+for (i in sort(unique(as.numeric(a$V2))))
 {
   this_ihc = a[which(as.numeric(a$V2) == i),]
 

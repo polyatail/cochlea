@@ -1,3 +1,4 @@
+from multiprocessing import Pool, Queue
 import sys
 from scipy import signal
 from scipy.io import wavfile
@@ -7,46 +8,91 @@ import time
 #from impinvar import impinvar
 #from scipy.fftpack import fft
 
+NUM_PROCS = 4
+
 SHOW_FILTERS = False
 SHOW_PROGRESS = False
 SHOW_RESULT = True
 
 POIS_LAMBDA = 0.01
-SAMPLE_RATE = 44100.0
+SAMPLE_RATE = 96000
+CHUNK_SIZE = 9600
 NUM_IHCS = 3500
 SIM_IHCS = (0, 3500)
 
 # read in signal
-s_in = wavfile.read("andy.wav")[1][:,1] / np.iinfo(np.int32).max
+#s_in = wavfile.read("alphabet.wav")[1][:,1] / np.iinfo(np.int32).max
+#s_in = wavfile.read("440h.32le.wav")[1] / np.iinfo(np.int32).max
+#s_in = wavfile.read("andy.wav")[1][:,1] / np.iinfo(np.int32).max
+s_in = wavfile.read("andy_96k.wav")[1] / np.iinfo(np.int32).max
 #s_in = wavfile.read("wkwttg.wav")[1][:,1] / np.iinfo(np.int32).max
 #s_in = s_in[:10000]
 
-def calc_coeffs(Q, w):
-  # DAPGF filter, continuous time
+def fourth_dapgf(Q, w):
+  # fourth order DAPGF, continuous-time
   w = np.float64(w)
   Q = np.float64(Q)
 
   term1 = w / Q
-  term2 = w
 
-#  # third order
-#  b = np.array((np.power(w, 5.0), 0.0), dtype=np.float64)
-#
-#  a = np.array((1.0,
-#                3*term1,
-#                3*np.power(term1, 2) + 3*np.power(term2, 2),
-#                np.power(term1, 3) + 6*term1*np.power(term2, 2),
-#                3*np.power(term1, 2)*np.power(term2, 2) + 3*np.power(term2, 4),
-#                3*term1*np.power(term2, 4),
-#                np.power(term2, 6)),
-#               dtype=np.float64)
+  # fourth order DAPGF
+  b = np.array((np.power(w, 7.0), 0.0), dtype=np.float64)
 
-  # first order
-  b = np.array((w, 0.0), dtype=np.float64)
+  a = np.array((1.0,
+                4*term1,
+                6*np.power(term1, 2) + 4*np.power(w, 2),
+                4*np.power(term1, 3) + 12*term1*np.power(w, 2),
+                np.power(term1, 4) + 12*np.power(term1, 2)*np.power(w, 2) + 6*np.power(w, 4),
+                4*np.power(term1, 3)*np.power(w, 2) + 12*term1*np.power(w, 4),
+                6*np.power(term1, 2)*np.power(w, 4) + 4*np.power(w, 6),
+                4*term1*np.power(w, 6),
+                np.power(w, 8)), dtype=np.float64)
 
-  a = np.array((1.0, term1, np.power(term2, 2)), dtype=np.float64)
+  return b, a
 
-  return (b, a)
+def third_dapgf(Q, w):
+  # third order APGF, continuous-time
+  w = np.float64(w)
+  Q = np.float64(Q)
+
+  term1 = w / Q
+
+  b = np.array((np.power(w, 6.0)), dtype=np.float64)
+
+  a = np.array((1.0,
+                3*term1,
+                3*np.power(term1, 2) + 3*np.power(w, 2),
+                np.power(term1, 3) + 6*term1*np.power(w, 2),
+                3*np.power(term1, 2)*np.power(w, 2) + 3*np.power(w, 4),
+                3*term1*np.power(w, 4),
+                np.power(w, 6)),
+               dtype=np.float64)
+
+  return b, a
+
+def first_apgf(Q, w):
+  # first order APGF, continuous-time
+  b = np.array((np.power(w, 2)), dtype=np.float64)
+  a = np.array((1.0, w / Q, np.power(w, 2)), dtype=np.float64)
+
+  return signal.normalize(b, a)
+
+def bp_biquad(Q, w0, Fs):
+  # http://www.musicdsp.org/files/Audio-EQ-Cookbook.txt
+
+  w0 = w0/Fs
+  alpha = np.sin(w0)/(2*Q)
+
+  b0 = Q*alpha
+  b1 = 0 
+  b2 = -Q*alpha
+  a0 = 1 + alpha
+  a1 = -2*np.cos(w0)
+  a2 = 1 - alpha
+
+  b, a = signal.normalize((b0, b1, b2), (a0, a1, a2))
+
+  return np.concatenate((b, a))
 
 def digital_bode_plot(b, a):
   plt.figure()
@@ -84,6 +130,7 @@ zi = {}
 cf = {}
 cf_rad = {}
 cf_warp = {}
+delays = {}
 gain = {}
 
 sys.stderr.write("calculating coefficients...\n")
@@ -96,7 +143,7 @@ if SHOW_FILTERS:
 for i in range(*SIM_IHCS):
   # start with gain (q) of 1/2**0.5 (minimum for 0 dB gain)
   #gain[i] = 0.5**0.5
-  gain[i] = 10
+  gain[i] = 2.1
 
   # greenwood function
   # https://en.wikipedia.org/wiki/Greenwood_function
@@ -107,48 +154,71 @@ for i in range(*SIM_IHCS):
   # https://en.wikipedia.org/wiki/Bilinear_transform#Frequency_warping
   cf_warp[i] = (2.0*SAMPLE_RATE) * np.arctan((0.5/SAMPLE_RATE)*cf_rad[i])
 
-  # use 3rd order DAPGF and convert to digital filter
-  cont_filter_bank[i] = calc_coeffs(gain[i], cf_rad[i])
+  # use 4rd order DAPGF and convert to digital filter
+  cont_filter_bank[i] = fourth_dapgf(gain[i], cf_rad[i])
 
   ## method 1: cont2discrete
-  filter_bank[i] = signal.cont2discrete(cont_filter_bank[i], dt=1.0/SAMPLE_RATE, method="bilinear")
+  filter_bank[i] = signal.cont2discrete(first_apgf(gain[i], cf_rad[i]), dt=1.0/SAMPLE_RATE, method="bilinear")
   # don't know why cont2discrete outputs first term as a nested list
   filter_bank[i] = (filter_bank[i][0][0], filter_bank[i][1])
+  # generate bank of three LP biquads (aka 3rd order APGF)
+  filter_bank[i] = np.tile(np.concatenate(filter_bank[i]), (4, 1))
+  # and add on a BP biquad to make a fourth order DAPGF
+  filter_bank[i][3] = bp_biquad(10.0, cf_warp[i], SAMPLE_RATE)
 
   # setup initial conditions for lfilter
-  zi[i] = signal.lfilter_zi(*filter_bank[i])
+  zi[i] = np.tile([0, 0], (4, 1))
 
-  if SHOW_FILTERS:
+  # track delay of filters at CF
+  #delays[i] = int(round(max(signal.group_delay(filter_bank[i])[1])))
+
+  if SHOW_FILTERS and i % 10 == 0:
     plt.clf()
 
     # frequency response of continuous time filter
-    w, mag, phase = signal.bode(cont_filter_bank[i], w=2*np.pi*np.linspace(20, 22000, num=1000))
+    w, mag, phase = signal.bode(cont_filter_bank[i], w=2*np.pi*np.linspace(0.0, 22050, num=2000))
 
     plt.subplot(3, 1, 1)
     plt.title("Freq. Resp. Analog CF=%.02f" % cf[i])
     plt.xlabel("Frequency (Hz)")
     plt.ylabel("dB")
-    plt.plot(w/(2*np.pi), mag)
+    plt.ylim(-30, 100)
+    plt.semilogx(w/(2*np.pi), mag)
 
     # frequency response of discrete time filter
-    w, h = signal.freqz(*filter_bank[i], worN=1500)
+    w, h = signal.sosfreqz(filter_bank[i], 1500)
 
     plt.subplot(3, 1, 2)
     plt.title("Freq. Resp. Digital CF=%.02f" % cf[i])
     plt.xlabel("Normalized Frequency (rad/sample)")
     plt.ylabel("dB")
-    plt.plot(w/np.pi, 20*np.log10(np.abs(h)))
+    plt.ylim(-30, 100)
+    plt.semilogx(w/np.pi, 20*np.log10(np.abs(h)))
+
+#    # group delay of discrete time filter
+#    w, gd = signal.group_delay(filter_bank[i])
+#
+#    plt.subplot(3, 1, 2)
+#    plt.title("Group Delay")
+#    plt.ylabel("Delay (samples")
+#    plt.xlabel("Normalized Frequency (rad/sample)")
+#    plt.plot(w, gd)
 
     # plot of testing discrete time filter
     signal_in = np.sin(2*np.pi*cf[i]*np.linspace(0, 0.1, SAMPLE_RATE*0.1)) + 0.5*np.random.randn(int(SAMPLE_RATE*0.1))
-    signal_out = signal.filtfilt(*filter_bank[i], x=signal_in)
+    #signal_out = signal.filtfilt(*filter_bank[i], x=signal_in)
+    #signal_out = signal.lfilter(*filter_bank[i], x=signal_in)
+    #signal_out = signal.lfilter(*filter_bank[i], x=signal_out)
+    #signal_out = signal.lfilter(*filter_bank[i], x=signal_out)
+    signal_out = signal.sosfilt(filter_bank[i], x=signal_in)
 
-    plt.subplot(3, 1, 3)
+    ax1 = plt.subplot(3, 1, 3)
     plt.title("Filter Test CF=%.02f" % cf[i])
     plt.xlabel("Sample")
-    plt.ylabel("Amplitude")
-    plt.plot(signal_in)
-    plt.plot(signal_out)
+
+    ax1.plot(signal_in)
+    ax2 = ax1.twinx()
+    ax2.plot(signal_out, color="orange")
 
     plt.pause(0.01)
 
@@ -166,31 +236,49 @@ sys.stderr.write("processing waveform...\n")
 if SHOW_PROGRESS:
   plt.ion()
 
-while True:
-  s_time = time.time()
+# process small chunks at a time
+s_time = time.time()
 
-  output_bank = {}
+output_bank = dict(zip(range(*SIM_IHCS), [np.zeros(len(s_in)) for _ in range(*SIM_IHCS)]))
+padding = int(0.1*CHUNK_SIZE)
+
+def _filt_sig(q_in, q_out):
+  while True:
+    i, coeffs, data, zi = q_in.get(True)
+    s_out, zf = signal.sosfilt(coeffs, x=data, zi=zi)
+    q_out.put((i, s_out, zf))
+
+mp_q_in = Queue()
+mp_q_out = Queue()
+mp_p = Pool(NUM_PROCS, _filt_sig, (mp_q_in, mp_q_out))
+
+for s_idx in range(0, len(s_in), CHUNK_SIZE):
+  chunk_in = s_in[s_idx:s_idx+CHUNK_SIZE]
+  chunk_in = np.concatenate((chunk_in[:padding], chunk_in[:padding][::-1], chunk_in))
 
   for i in range(*SIM_IHCS):
-    s_out = signal.filtfilt(*filter_bank[i], x=s_in)
-    output_bank[i] = s_out
+    mp_q_in.put((i, filter_bank[i], chunk_in, zi[i]))
 
-    if SHOW_PROGRESS:
+  for _ in range(*SIM_IHCS):
+    i, s_out, zf = mp_q_out.get(True)
+    zi[i] = zf
+    output_bank[i][s_idx:s_idx+CHUNK_SIZE] = s_out[2*padding:]
+
+    if SHOW_PROGRESS and i % 100 == 0:
       plt.clf()
       plt.title("IHC CF: %.02f" % cf[i])
       plt.xlabel("Time (sample)")
       plt.ylabel("Amplitude (a.u.)")
       plt.ylim((-1, 1))
-      plt.plot(s_in, linewidth=1)
+      plt.plot(chunk_in, linewidth=1)
       plt.plot(np.clip(s_out, -1, 1), linewidth=1)
       plt.pause(0.001)
 
-    sys.stderr.write("\rihc: %s cf: %.02f" % (i+1, cf[i]))
+    sys.stderr.write("\rchunk: %s ihc: %s cf: %.02f" % (s_idx, i+1, cf[i]))
 
-  sys.stderr.write("\ntook %.02f seconds\n" % (time.time() - s_time))
+sys.stderr.write("\ntook %.02f seconds\n" % (time.time() - s_time))
 
-  # perform only one iteration
-  break
+mp_p.terminate()
 
 if SHOW_PROGRESS:
   plt.ioff()
@@ -236,6 +324,8 @@ if SHOW_RESULT:
   plt.figure()
   plt.title("Cochlear Encoding")
   plt.xlabel("Time (sample)")
+  #plt.ylabel("IHC CF")
+  #plt.scatter(coding_x, coding_y, s=2)
   plt.ylabel("log2(IHC CF)")
   plt.scatter(coding_x, np.log2(coding_y), s=2)
   plt.show()
