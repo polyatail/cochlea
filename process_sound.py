@@ -5,8 +5,6 @@ from scipy.io import wavfile
 import matplotlib.pyplot as plt
 import numpy as np
 import time
-#from impinvar import impinvar
-#from scipy.fftpack import fft
 
 NUM_PROCS = 4
 
@@ -21,54 +19,7 @@ NUM_IHCS = 3500
 SIM_IHCS = (0, 3500)
 
 # read in signal
-#s_in = wavfile.read("alphabet.wav")[1][:,1] / np.iinfo(np.int32).max
-#s_in = wavfile.read("440h.32le.wav")[1] / np.iinfo(np.int32).max
-#s_in = wavfile.read("andy.wav")[1][:,1] / np.iinfo(np.int32).max
 s_in = wavfile.read("andy_96k.wav")[1] / np.iinfo(np.int32).max
-#s_in = wavfile.read("wkwttg.wav")[1][:,1] / np.iinfo(np.int32).max
-#s_in = s_in[:10000]
-
-def fourth_dapgf(Q, w):
-  # fourth order DAPGF, continuous-time
-  w = np.float64(w)
-  Q = np.float64(Q)
-
-  term1 = w / Q
-
-  # fourth order DAPGF
-  b = np.array((np.power(w, 7.0), 0.0), dtype=np.float64)
-
-  a = np.array((1.0,
-                4*term1,
-                6*np.power(term1, 2) + 4*np.power(w, 2),
-                4*np.power(term1, 3) + 12*term1*np.power(w, 2),
-                np.power(term1, 4) + 12*np.power(term1, 2)*np.power(w, 2) + 6*np.power(w, 4),
-                4*np.power(term1, 3)*np.power(w, 2) + 12*term1*np.power(w, 4),
-                6*np.power(term1, 2)*np.power(w, 4) + 4*np.power(w, 6),
-                4*term1*np.power(w, 6),
-                np.power(w, 8)), dtype=np.float64)
-
-  return b, a
-
-def third_dapgf(Q, w):
-  # third order APGF, continuous-time
-  w = np.float64(w)
-  Q = np.float64(Q)
-
-  term1 = w / Q
-
-  b = np.array((np.power(w, 6.0)), dtype=np.float64)
-
-  a = np.array((1.0,
-                3*term1,
-                3*np.power(term1, 2) + 3*np.power(w, 2),
-                np.power(term1, 3) + 6*term1*np.power(w, 2),
-                3*np.power(term1, 2)*np.power(w, 2) + 3*np.power(w, 4),
-                3*term1*np.power(w, 4),
-                np.power(w, 6)),
-               dtype=np.float64)
-
-  return b, a
 
 def first_apgf(Q, w):
   # first order APGF, continuous-time
@@ -94,35 +45,6 @@ def bp_biquad(Q, w0, Fs):
 
   return np.concatenate((b, a))
 
-def digital_bode_plot(b, a):
-  plt.figure()
-  w, h = signal.freqz(b, a, worN=1500)
-  plt.subplot(2, 1, 1)
-  db = 20*np.log10(np.abs(h))
-  plt.plot(w/np.pi, db)
-  plt.subplot(2, 1, 2)
-  plt.plot(w/np.pi, np.angle(h))
-  plt.show()
-
-def sos_bode_plot(sos):
-  plt.figure()
-  w, h = signal.sosfreqz(sos, worN=1500)
-  plt.subplot(2, 1, 1)
-  db = 20*np.log10(np.abs(h))
-  plt.plot(w/np.pi, db)
-  plt.subplot(2, 1, 2)
-  plt.plot(w/np.pi, np.angle(h))
-  plt.show()
-
-def analog_bode_plot(sys):
-  plt.figure()
-  x, y, z = signal.bode(sys, w=2*np.pi*np.linspace(20, 22000, num=1000))
-  plt.subplot(2, 1, 1)
-  plt.plot(x/(2*np.pi), y)
-  plt.subplot(2, 1, 2)
-  plt.plot(x/(2*np.pi), z)
-  plt.show()
-
 # build filter bank
 cont_filter_bank = {}
 filter_bank = {}
@@ -130,7 +52,6 @@ zi = {}
 cf = {}
 cf_rad = {}
 cf_warp = {}
-delays = {}
 gain = {}
 
 sys.stderr.write("calculating coefficients...\n")
@@ -169,9 +90,6 @@ for i in range(*SIM_IHCS):
   # setup initial conditions for lfilter
   zi[i] = np.tile([0, 0], (4, 1))
 
-  # track delay of filters at CF
-  #delays[i] = int(round(max(signal.group_delay(filter_bank[i])[1])))
-
   if SHOW_FILTERS and i % 10 == 0:
     plt.clf()
 
@@ -195,21 +113,8 @@ for i in range(*SIM_IHCS):
     plt.ylim(-30, 100)
     plt.semilogx(w/np.pi, 20*np.log10(np.abs(h)))
 
-#    # group delay of discrete time filter
-#    w, gd = signal.group_delay(filter_bank[i])
-#
-#    plt.subplot(3, 1, 2)
-#    plt.title("Group Delay")
-#    plt.ylabel("Delay (samples")
-#    plt.xlabel("Normalized Frequency (rad/sample)")
-#    plt.plot(w, gd)
-
     # plot of testing discrete time filter
     signal_in = np.sin(2*np.pi*cf[i]*np.linspace(0, 0.1, SAMPLE_RATE*0.1)) + 0.5*np.random.randn(int(SAMPLE_RATE*0.1))
-    #signal_out = signal.filtfilt(*filter_bank[i], x=signal_in)
-    #signal_out = signal.lfilter(*filter_bank[i], x=signal_in)
-    #signal_out = signal.lfilter(*filter_bank[i], x=signal_out)
-    #signal_out = signal.lfilter(*filter_bank[i], x=signal_out)
     signal_out = signal.sosfilt(filter_bank[i], x=signal_in)
 
     ax1 = plt.subplot(3, 1, 3)
@@ -231,17 +136,18 @@ if SHOW_FILTERS:
 sys.stderr.write("\ntook %.02f seconds\n" % (time.time() - s_time,))
 
 # filter using filterbank
-sys.stderr.write("processing waveform...\n")
+sys.stderr.write("first pass: whole waveform...\n")
 
 if SHOW_PROGRESS:
   plt.ion()
 
-# process small chunks at a time
+# process waveform in chunks of a given size
 s_time = time.time()
 
 output_bank = dict(zip(range(*SIM_IHCS), [np.zeros(len(s_in)) for _ in range(*SIM_IHCS)]))
 padding = int(0.1*CHUNK_SIZE)
 
+# use multiprocessing to speed this up
 def _filt_sig(q_in, q_out):
   while True:
     i, coeffs, data, zi = q_in.get(True)
@@ -253,6 +159,7 @@ mp_q_out = Queue()
 mp_p = Pool(NUM_PROCS, _filt_sig, (mp_q_in, mp_q_out))
 
 for s_idx in range(0, len(s_in), CHUNK_SIZE):
+  # padding the waveform allows filter to settle
   chunk_in = s_in[s_idx:s_idx+CHUNK_SIZE]
   chunk_in = np.concatenate((chunk_in[:padding], chunk_in[:padding][::-1], chunk_in))
 
