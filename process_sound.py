@@ -15,6 +15,7 @@ SHOW_RESULT = True
 POIS_LAMBDA = 0.01
 SAMPLE_RATE = 96000
 CHUNK_SIZE = 9600
+PAD_SIZE = 9600
 NUM_IHCS = 3500
 SIM_IHCS = (0, 3500)
 
@@ -145,7 +146,6 @@ if SHOW_PROGRESS:
 s_time = time.time()
 
 output_bank = dict(zip(range(*SIM_IHCS), [np.zeros(len(s_in)) for _ in range(*SIM_IHCS)]))
-padding = int(0.1*CHUNK_SIZE)
 
 # use multiprocessing to speed this up
 def _filt_sig(q_in, q_out):
@@ -161,7 +161,7 @@ mp_p = Pool(NUM_PROCS, _filt_sig, (mp_q_in, mp_q_out))
 for s_idx in range(0, len(s_in), CHUNK_SIZE):
   # padding the waveform allows filter to settle
   chunk_in = s_in[s_idx:s_idx+CHUNK_SIZE]
-  chunk_in = np.concatenate((chunk_in[:padding], chunk_in[:padding][::-1], chunk_in))
+  chunk_in = np.concatenate((chunk_in[:PAD_SIZE], chunk_in[:PAD_SIZE][::-1], chunk_in))
 
   for i in range(*SIM_IHCS):
     mp_q_in.put((i, filter_bank[i], chunk_in, zi[i]))
@@ -169,7 +169,7 @@ for s_idx in range(0, len(s_in), CHUNK_SIZE):
   for _ in range(*SIM_IHCS):
     i, s_out, zf = mp_q_out.get(True)
     zi[i] = zf
-    output_bank[i][s_idx:s_idx+CHUNK_SIZE] = s_out[2*padding:]
+    output_bank[i][s_idx:s_idx+CHUNK_SIZE] = s_out[2*PAD_SIZE:]
 
     if SHOW_PROGRESS and i % 100 == 0:
       plt.clf()
@@ -190,8 +190,8 @@ mp_p.terminate()
 if SHOW_PROGRESS:
   plt.ioff()
 
-# determine when neurons are activated
-sys.stderr.write("generating neuronal encoding...\n")
+# determine when neurons are activated and adjust gain
+sys.stderr.write("second pass: gain feedback loop...\n")
 s_time = time.time()
 
 coding_x = []
@@ -199,6 +199,7 @@ coding_y = []
 
 timeout = np.zeros(NUM_IHCS, dtype=np.int64)
 time_since_last = np.zeros(NUM_IHCS, dtype=np.int64)
+rate_estimate = dict(zip(range(*SIM_IHCS), [0 for _ in range(*SIM_IHCS)]))
 firings = dict(zip(range(*SIM_IHCS), [[0] for _ in range(*SIM_IHCS)]))
 
 _timeout_reset = int(0.01 * SAMPLE_RATE)
